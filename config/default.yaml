@@ -1,12 +1,10 @@
 seed: 1337
-langs: ["en"]
 data:
   data_dir: data
   output_dir: experiments
-  manifest_name: fluency_manifest.csv
-  dataset: commonvoice  # options: commonvoice, speechocean
-  dataset_name: mozilla-foundation/common_voice_17_0
-  langs: ["en"]
+  manifest_name: speechocean_manifest.csv
+  dataset: speechocean
+  dataset_name: mispeech/speechocean762
   score_thresholds:
     poor: 60
     moderate: 85

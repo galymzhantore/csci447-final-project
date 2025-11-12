@@ -6,7 +6,6 @@ DEVICE ?= android_tablet
 TARGET_DEVICE ?= $(DEVICE)
 LABEL_SCHEMA ?= 3class
 CLIP_SECONDS ?= 3
-LANGS ?= en
 
 .PHONY: setup download features train_teacher train_student train_plda evaluate_all quantize export_tflite convert_android android_build android_profile profile report lint test smoke clean
 
@@ -27,7 +26,7 @@ test:
 	$(PYTHON) -m pytest
 
 download:
-	$(PYTHON) -m src.data.download --config $(CONFIG) --data-dir $(DATA_DIR) --output-dir $(OUTPUT_DIR) --langs $(LANGS)
+	$(PYTHON) -m src.data.download --config $(CONFIG) --data-dir $(DATA_DIR) --output-dir $(OUTPUT_DIR)
 
 features:
 	$(PYTHON) -m src.features.build_features --config $(CONFIG) --data-dir $(DATA_DIR) --output-dir $(OUTPUT_DIR)

@@ -12,7 +12,6 @@ def build_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config/default.yaml", help="Path to YAML config")
     parser.add_argument("--data-dir", dest="data_dir", default=None, help="Override data directory")
     parser.add_argument("--output-dir", dest="output_dir", default=None, help="Override experiment directory")
-    parser.add_argument("--langs", default=None, help="Comma-separated language codes")
     parser.add_argument("--label-schema", dest="label_schema", default=None, help="Label schema string or JSON mapping")
     parser.add_argument("--model", default=None, help="Model name to train/evaluate")
     parser.add_argument("--snr-sweep", dest="snr_sweep", default=None, help="Comma-separated SNR values")
@@ -29,8 +28,6 @@ def apply_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides.setdefault("data", {})["data_dir"] = args.data_dir
     if args.output_dir:
         overrides.setdefault("data", {})["output_dir"] = args.output_dir
-    if args.langs:
-        overrides["langs"] = [code.strip() for code in args.langs.split(",") if code.strip()]
     if args.label_schema:
         overrides.setdefault("data", {})["label_schema"] = args.label_schema
     if args.model:

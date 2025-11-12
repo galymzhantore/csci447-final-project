@@ -4,7 +4,7 @@ Edge-ready pipeline for scoring pronunciation/fluency from 1–5 s speech clip
 
 ## Highlights
 
-- **Data**: Pull Mozilla Common Voice (or Speechocean) splits with language filtering (`LANGS="en,es"`), optional locally recorded clips, deterministic manifests, and augmentation-ready metadata.
+- **Data**: Stream the Speechocean 762 fluency corpus via Hugging Face (with optional locally recorded clips) into deterministic manifests ready for augmentation.
 - **Features**: MFCC/FBANK extraction with CMVN, augmentation (noise, pitch/tempo, RIR), caching, and configurable clip windows.
 - **Models**: Compact MLPs (teacher/student), classical PLDA scoring, optional distillation, multi-metric evaluation, and SNR robustness sweeps.
 - **Quantization**: Dynamic + static INT8 quantization (PyTorch) with accuracy tracking, ONNX export, FP32/INT8 TFLite generation, and metadata packs for Android assets.
@@ -17,7 +17,7 @@ python -m venv .venv && source .venv/bin/activate
 make setup
 
 # 1) Data + features
-make download LANGS="en"
+make download
 make features
 
 # 2) Training
@@ -39,7 +39,7 @@ make android_profile DEVICE="android_tablet"
 make report
 ```
 
-Core parameters (override via env or CLI): `LANGS`, `DEVICE/TARGET_DEVICE`, `CLIP_SECONDS`, `LABEL_SCHEMA`, `DATA_DIR`, `OUTPUT_DIR`.
+Core parameters (override via env or CLI): `DEVICE/TARGET_DEVICE`, `CLIP_SECONDS`, `LABEL_SCHEMA`, `DATA_DIR`, `OUTPUT_DIR`.
 
 ## Repository Layout
 
@@ -61,7 +61,7 @@ repo_root/
 
 | Target | Description |
 | ------ | ----------- |
-| `make download` | Stream Common Voice/Speechocean splits, merge optional local recordings, stratify manifests. |
+| `make download` | Stream Speechocean 762 splits, merge optional local recordings, stratify manifests. |
 | `make features` | Run preprocessing, augmentations, MFCC/FBANK extraction, and CMVN stats. |
 | `make train_teacher` / `make train_student` | Train teacher MLP and distilled student. |
 | `make train_plda` | Fit a classical PLDA baseline and persist as `plda.joblib`. |
@@ -85,8 +85,7 @@ Open `android_app/` in Android Studio Igauana+, plug in a tablet, and run to cap
 
 ## Data Notes
 
-- Default dataset: `mozilla-foundation/common_voice_17_0`. Labels are derived from up/down vote ratios (100-point pseudo-score mapped to `poor`, `moderate`, `good` thresholds).
-- To switch to Speechocean, set `data.dataset: speechocean` or run `make download DATA_DIR=... LANGS="en"`.
+- Dataset: `mispeech/speechocean762` (score buckets map to `poor`, `moderate`, `good`). Authenticate with `huggingface-cli login` before `make download`.
 - Custom label schemas: pass `LABEL_SCHEMA='{"bad":0,"ok":1,"great":2}'` or edit `config/default.yaml`.
 - Local bilingual snippets: run `python -m src.data.local_recorder --output-dir data/local --label moderate` and re-run `make download`.
 
@@ -107,4 +106,4 @@ docker run --rm -v $PWD:/workspace edge-fluency bash -lc "make download && make 
 
 ## License & Attribution
 
-Released under the MIT License. Ensure compliance with Common Voice/Speechocean dataset terms when downloading or redistributing audio samples.
+Released under the MIT License. Ensure compliance with the Speechocean 762 dataset license when downloading or redistributing audio samples.
