@@ -56,4 +56,18 @@ class SimplePLDA:
         return exp / exp.sum(axis=1, keepdims=True)
 
 
-__all__ = ["SimplePLDA", "PLDAConfig"]
+class ConstantPLDA:
+    def __init__(self, class_id: int, num_classes: int) -> None:
+        self.class_id = class_id
+        self.num_classes = num_classes
+
+    def predict(self, X: np.ndarray) -> np.ndarray:  # noqa: N803 - sklearn-style signature
+        return np.full(X.shape[0], self.class_id, dtype=int)
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:  # noqa: N803
+        probs = np.zeros((X.shape[0], self.num_classes), dtype=float)
+        probs[:, self.class_id] = 1.0
+        return probs
+
+
+__all__ = ["SimplePLDA", "PLDAConfig", "ConstantPLDA"]

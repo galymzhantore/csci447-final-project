@@ -69,9 +69,24 @@ def dynamic_quantization(model: nn.Module, out_path: Path) -> nn.Module:
     return q_model
 
 
-def static_quantization(model: nn.Module, calibration_loader, max_batches: int | None = None) -> nn.Module:
-    backend = "fbgemm"
-    torch.backends.quantized.engine = backend
+def _select_backend(preferred=("fbgemm", "qnnpack")) -> str | None:
+    supported = getattr(torch.backends.quantized, "supported_engines", [])
+    for candidate in preferred:
+        if candidate in supported:
+            return candidate
+    return None
+
+
+def static_quantization(model: nn.Module, calibration_loader, max_batches: int | None = None) -> nn.Module | None:
+    backend = _select_backend()
+    if backend is None:
+        logger.warning("No supported quantized backend found; skipping static quantization.")
+        return None
+    try:
+        torch.backends.quantized.engine = backend
+    except RuntimeError as exc:
+        logger.warning("Unable to set quantized backend %s (%s); skipping static quantization.", backend, exc)
+        return None
     qconfig_mapping = get_default_qconfig_mapping(backend)
     example_batch = next(iter(calibration_loader))["features"].cpu()
     prepared = prepare_fx(copy.deepcopy(model).cpu().eval(), qconfig_mapping, example_inputs=(example_batch,))
@@ -133,15 +148,18 @@ def main() -> None:
         batch_size = cfg["training"].get("batch_size", 32)
         max_batches = max(1, calib_samples // max(batch_size, 1))
         static_model = static_quantization(model, train_loader, max_batches)
-        static_path = artifacts_dir / "model_static.pt"
-        torch.save(static_model.state_dict(), static_path)
-        static_metrics = evaluate_model(static_model, valid_loader, torch.device("cpu"), class_names)
-        summary["static"] = {
-            "size_mb": model_size_mb(static_path),
-            "accuracy": static_metrics.accuracy,
-            "macro_f1": static_metrics.macro_f1,
-            "accuracy_drop": float(base_metrics.accuracy - static_metrics.accuracy),
-        }
+        if static_model is not None:
+            static_path = artifacts_dir / "model_static.pt"
+            torch.save(static_model.state_dict(), static_path)
+            static_metrics = evaluate_model(static_model, valid_loader, torch.device("cpu"), class_names)
+            summary["static"] = {
+                "size_mb": model_size_mb(static_path),
+                "accuracy": static_metrics.accuracy,
+                "macro_f1": static_metrics.macro_f1,
+                "accuracy_drop": float(base_metrics.accuracy - static_metrics.accuracy),
+            }
+        else:
+            summary["static"] = {"skipped": True, "reason": "backend_unavailable"}
 
     prune_amount = q_cfg.get("prune_amount", 0.3)
     pruned_model = prune_model(model, prune_amount)

@@ -18,7 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from data.data_module import DataModule
 from models.distillation import DistillationLoss
 from models.mlp import build_mlp
-from models.plda import PLDAConfig, SimplePLDA
+from models.plda import ConstantPLDA, PLDAConfig, SimplePLDA
 from utils.cli import parse_config
 from utils.config import parse_label_schema
 from utils.logging_utils import setup_logger
@@ -85,12 +85,23 @@ def _collect_numpy(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
 def train_plda(cfg: Dict, train_loader: DataLoader, valid_loader: DataLoader, test_loader: DataLoader, label_map: Dict[str, int]) -> None:
     output_dir = Path(cfg["data"].get("output_dir", "experiments"))
     plda_cfg_dict = cfg.get("models", {}).get("plda", {})
-    plda_cfg = PLDAConfig(**plda_cfg_dict)
     X_train, y_train = _collect_numpy(train_loader)
+    unique_classes = np.unique(y_train)
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
-    model = SimplePLDA(plda_cfg, len(label_map))
-    model.fit(X_train, y_train)
+    num_classes = len(label_map)
+    if unique_classes.shape[0] < 2:
+        constant_class = int(unique_classes[0])
+        logger.warning("Only one class detected (%s); training constant PLDA baseline.", constant_class)
+        model = ConstantPLDA(constant_class, num_classes)
+    else:
+        effective_classes = unique_classes.shape[0]
+        max_dim = min(plda_cfg_dict.get("lda_dim", 32), effective_classes - 1, X_train.shape[1])
+        if max_dim < 1:
+            max_dim = 1
+        plda_cfg = PLDAConfig(**(plda_cfg_dict | {"lda_dim": max_dim}))
+        model = SimplePLDA(plda_cfg, num_classes)
+        model.fit(X_train, y_train)
 
     def _eval(loader: DataLoader) -> Dict:
         X, y = _collect_numpy(loader)
