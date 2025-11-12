@@ -2,7 +2,6 @@ PYTHON ?= python
 CONFIG ?= config/default.yaml
 DATA_DIR ?= ./data
 OUTPUT_DIR ?= ./experiments
-LANGS ?= en
 TARGET_DEVICE ?= pi4
 LABEL_SCHEMA ?= 3class
 CLIP_SECONDS ?= 3
@@ -26,7 +25,7 @@ test:
 	$(PYTHON) -m pytest
 
 download:
-	$(PYTHON) -m src.data.commonvoice_downloader --config $(CONFIG) --langs $(LANGS) --data-dir $(DATA_DIR) --output-dir $(OUTPUT_DIR)
+	$(PYTHON) -m src.data.speechocean_downloader --config $(CONFIG) --data-dir $(DATA_DIR) --output-dir $(OUTPUT_DIR) --split "train+validation+test"
 	$(PYTHON) -m src.data.manifest --config $(CONFIG) --data-dir $(DATA_DIR) --output-dir $(OUTPUT_DIR)
 
 features:

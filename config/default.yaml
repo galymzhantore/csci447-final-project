@@ -1,9 +1,14 @@
 seed: 1337
-langs: ["en"]
 data:
   data_dir: data
   output_dir: experiments
-  manifest_name: commonvoice_manifest.csv
+  manifest_name: speechocean_manifest.csv
+  dataset: speechocean
+  dataset_name: mispeech/speechocean762
+  score_thresholds:
+    poor: 60
+    moderate: 85
+  max_clips: null
   sample_rate: 16000
   clip_seconds: [1, 5]
   label_schema: "3class"
