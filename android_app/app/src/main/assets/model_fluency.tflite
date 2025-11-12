@@ -1,0 +1,1 @@
+Placeholder model. Run `make export_tflite` and `make convert_android` to install the trained TensorFlow Lite asset.

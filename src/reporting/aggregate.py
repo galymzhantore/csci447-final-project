@@ -36,20 +36,45 @@ def main() -> None:
         report_lines.append(f"- {snr} dB: {acc:.3f} acc")
     report_lines.append("")
     report_lines.append("## Quantization & Pruning")
-    for key, value in quant_summary.items():
-        report_lines.append(f"- {key}: {value:.3f} MB")
+    for name, stats in quant_summary.items():
+        if not isinstance(stats, dict):
+            continue
+        line = f"- {name}: {stats.get('size_mb', 0):.2f} MB"
+        if stats.get("accuracy") is not None:
+            line += f", acc={stats['accuracy']:.3f}"
+        if stats.get("accuracy_drop") is not None:
+            line += f" (drop {stats['accuracy_drop']:.3f})"
+        report_lines.append(line)
     report_lines.append("")
     report_lines.append("## Device Profiling")
-    for entry in profile:
-        report_lines.append(f"- {entry['model']}: {entry['latency_ms']:.2f}±{entry['std_ms']:.2f} ms, energy proxy {entry['energy_proxy']:.2f}")
+    for entry in (profile if isinstance(profile, list) else []):
+        model = entry.get("model", "unknown")
+        if model == "android_device":
+            report_lines.append(f"- Android app: {entry.get('latency_ms')} ms avg, {entry.get('memory_mb')} MB, battery {entry.get('battery_drop_mwh', 'n/a')}")
+            continue
+        report_lines.append(
+            f"- {model}: {entry.get('latency_ms', 0):.2f}±{entry.get('std_ms', 0):.2f} ms, mem={entry.get('memory_mb', 0):.1f} MB, energy proxy {entry.get('energy_proxy', 0):.2f}"
+        )
     report_lines.append("")
     report_lines.append("## Export Parity")
     report_lines.append(f"- ONNX delta {export_summary.get('onnx_delta', float('nan')):.6f}")
-    report_lines.append(f"- TFLite delta {export_summary.get('tflite_delta', float('nan')):.6f}")
+    if export_summary.get("fp32_tflite"):
+        report_lines.append(f"- FP32 TFLite acc={export_summary['fp32_tflite'].get('accuracy', float('nan')):.3f}")
+    if export_summary.get("int8_tflite"):
+        int8_info = export_summary["int8_tflite"]
+        drop = int8_info.get("accuracy_drop")
+        drop_txt = f"{drop:.3f}" if isinstance(drop, (float, int)) else "n/a"
+        report_lines.append(
+            f"- INT8 TFLite acc={int8_info.get('accuracy', float('nan')):.3f} (drop {drop_txt})"
+        )
 
     results_path = Path("results.md")
     results_path.write_text("\n".join(report_lines), encoding="utf-8")
     logger.info("Updated %s", results_path)
+
+    results_dir = Path(cfg.get("reporting", {}).get("results_dir", "results"))
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / "report.md").write_text("\n".join(report_lines), encoding="utf-8")
 
 
 if __name__ == "__main__":

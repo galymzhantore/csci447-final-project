@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
+import joblib
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -21,9 +23,9 @@ from utils.plotting import save_confusion_matrix, save_metric_curve
 logger = setup_logger(__name__)
 
 
-def load_model(cfg: Dict, input_dim: int, num_classes: int, device: torch.device) -> nn.Module:
+def load_torch_model(cfg: Dict, input_dim: int, num_classes: int, device: torch.device) -> nn.Module:
     model = build_mlp(cfg["training"].get("model", "mlp_small"), input_dim, num_classes, cfg["models"]).to(device)
-    ckpt_path = Path(cfg["data"].get("output_dir", "experiments")) / "checkpoints" / f"{cfg["training"].get("model", "mlp_small")}.pt"
+    ckpt_path = Path(cfg["data"].get("output_dir", "experiments")) / "checkpoints" / f"{cfg['training'].get('model', 'mlp_small')}.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint {ckpt_path} not found")
     state = torch.load(ckpt_path, map_location=device)
@@ -44,6 +46,30 @@ def evaluate_loader(model: nn.Module, loader: DataLoader, device: torch.device, 
             probs.extend(torch.softmax(logits, dim=1).cpu().tolist())
     metrics = compute_metrics(targets, preds, probs, class_names)
     return {"metrics": metrics, "y_true": targets, "y_pred": preds}
+
+
+def _collect_numpy(loader: DataLoader) -> Dict[str, np.ndarray]:
+    feats, labels = [], []
+    for batch in loader:
+        feats.append(batch["features"].flatten(1).cpu().numpy())
+        labels.append(batch["label"].cpu().numpy())
+    return {"features": np.concatenate(feats, axis=0), "labels": np.concatenate(labels, axis=0)}
+
+
+def load_plda_bundle(cfg: Dict) -> Dict:
+    ckpt_path = Path(cfg["data"].get("output_dir", "experiments")) / "checkpoints" / "plda.joblib"
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"PLDA checkpoint missing at {ckpt_path}. Run make train_plda first.")
+    return joblib.load(ckpt_path)
+
+
+def evaluate_plda_loader(bundle: Dict, loader: DataLoader, class_names: List[str]) -> Dict:
+    arrays = _collect_numpy(loader)
+    feats = bundle["scaler"].transform(arrays["features"])
+    preds = bundle["model"].predict(feats)
+    probs = bundle["model"].predict_proba(feats)
+    metrics = compute_metrics(arrays["labels"], preds, probs, class_names)
+    return {"metrics": metrics, "y_true": arrays["labels"].tolist(), "y_pred": preds.tolist()}
 
 
 def snr_sweep(cfg: Dict, model: nn.Module, label_map: Dict[str, int], device: torch.device, snr_levels: List[int]) -> Dict[int, float]:
@@ -75,42 +101,81 @@ def snr_sweep(cfg: Dict, model: nn.Module, label_map: Dict[str, int], device: to
     return results
 
 
+def snr_sweep_plda(cfg: Dict, bundle: Dict, label_map: Dict[str, int], snr_levels: List[int]) -> Dict[int, float]:
+    data_cfg = cfg["data"].copy()
+    feature_cfg = cfg["features"].copy()
+    feature_cfg["on_the_fly"] = True
+    cmvn_stats = load_cmvn(Path(cfg["data"].get("output_dir", "experiments")) / "features" / "cmvn.npz")
+    cache = FeatureCache(Path(feature_cfg.get("cache_dir", "data/features")), feature_cfg.get("type", "mfcc"))
+    manifest = Path(cfg["data"].get("output_dir", "experiments")) / "manifests" / "test.csv"
+    results = {}
+    for snr in snr_levels:
+        aug_cfg = cfg.get("augmentation", {}).copy()
+        aug_cfg.update({"enabled": True, "gaussian_snr_db": [snr], "pink_snr_db": []})
+        dataset = SpeechDataset(
+            manifest,
+            cache,
+            feature_cfg,
+            data_cfg,
+            cmvn_stats,
+            label_map,
+            augmentation_cfg=aug_cfg,
+            split="eval",
+        )
+        loader = DataLoader(dataset, batch_size=cfg["evaluation"].get("batch_size", 64), shuffle=False)
+        metrics = evaluate_plda_loader(bundle, loader, list(label_map.keys()))
+        results[snr] = metrics["metrics"].accuracy
+        logger.info("[PLDA] SNR %s dB -> accuracy %.3f", snr, metrics["metrics"].accuracy)
+    return results
+
+
 def main() -> None:
     cfg = parse_config("Evaluate edge fluency models")
     label_map = cfg["data"].get("label_map") or parse_label_schema(cfg["data"].get("label_schema", "3class"))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data_module = DataModule(cfg["data"], cfg["features"], cfg.get("augmentation", {}), label_map)
     train_loader = data_module.train_dataloader(cfg["training"].get("batch_size", 32))
-    sample = train_loader.dataset[0]
-    feat = sample["features"]
-    input_dim = feat.shape[0] * feat.shape[1]
-    num_classes = len(label_map)
-    model = load_model(cfg, input_dim, num_classes, device)
+    valid_loader = data_module.valid_dataloader(cfg["training"].get("batch_size", 32))
+    test_loader = data_module.test_dataloader(cfg["evaluation"].get("batch_size", 64))
+    model_choice = cfg["training"].get("model", "mlp_small")
 
     evals = {}
-    for split, loader in {
-        "train": train_loader,
-        "valid": data_module.valid_dataloader(cfg["training"].get("batch_size", 32)),
-        "test": data_module.test_dataloader(cfg["evaluation"].get("batch_size", 64)),
-    }.items():
-        result = evaluate_loader(model, loader, device, list(label_map.keys()))
-        evals[split] = {
-            "accuracy": result["metrics"].accuracy,
-            "macro_f1": result["metrics"].macro_f1,
-            "confusion": result["metrics"].confusion,
-        }
-        if split == "test":
-            fig_path = Path(cfg["data"].get("output_dir", "experiments")) / "figures" / "confusion_matrix.png"
-            save_confusion_matrix(result["metrics"].confusion, list(label_map.keys()), fig_path)
+    if model_choice == "plda":
+        bundle = load_plda_bundle(cfg)
+        for split, loader in {"train": train_loader, "valid": valid_loader, "test": test_loader}.items():
+            result = evaluate_plda_loader(bundle, loader, list(label_map.keys()))
+            evals[split] = {
+                "accuracy": result["metrics"].accuracy,
+                "macro_f1": result["metrics"].macro_f1,
+                "confusion": result["metrics"].confusion,
+            }
+        snr_levels = cfg.get("evaluation", {}).get("snr_sweep_db", [0, 5, 10, 15, 20, 30])
+        snr_results = snr_sweep_plda(cfg, bundle, label_map, snr_levels)
+    else:
+        sample = train_loader.dataset[0]
+        feat = sample["features"]
+        input_dim = feat.shape[0] * feat.shape[1]
+        num_classes = len(label_map)
+        model = load_torch_model(cfg, input_dim, num_classes, device)
+        for split, loader in {"train": train_loader, "valid": valid_loader, "test": test_loader}.items():
+            result = evaluate_loader(model, loader, device, list(label_map.keys()))
+            evals[split] = {
+                "accuracy": result["metrics"].accuracy,
+                "macro_f1": result["metrics"].macro_f1,
+                "confusion": result["metrics"].confusion,
+            }
+            if split == "test":
+                fig_path = Path(cfg["data"].get("output_dir", "experiments")) / "figures" / "confusion_matrix.png"
+                save_confusion_matrix(result["metrics"].confusion, list(label_map.keys()), fig_path)
+        snr_levels = cfg.get("evaluation", {}).get("snr_sweep_db", [0, 5, 10, 15, 20, 30])
+        snr_results = snr_sweep(cfg, model, label_map, device, snr_levels)
 
-    snr_levels = cfg.get("evaluation", {}).get("snr_sweep_db", [0, 5, 10, 15, 20, 30])
-    snr_results = snr_sweep(cfg, model, label_map, device, snr_levels)
     sweep_path = Path(cfg["data"].get("output_dir", "experiments")) / "figures" / "snr_curve.png"
     save_metric_curve(snr_levels, [snr_results[s] for s in snr_levels], "SNR (dB)", "Accuracy", "Robustness", sweep_path)
 
     report_path = Path(cfg["data"].get("output_dir", "experiments")) / "metrics" / "evaluation.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps({"splits": evals, "snr": snr_results}, indent=2), encoding="utf-8")
+    report_path.write_text(json.dumps({"splits": evals, "snr": snr_results, "model": model_choice}, indent=2), encoding="utf-8")
     logger.info("Evaluation artifacts saved to %s", report_path)
 
 

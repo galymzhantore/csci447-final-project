@@ -5,16 +5,20 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, Tuple
 
+import joblib
+import numpy as np
 import torch
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+from sklearn.preprocessing import StandardScaler
 
 from data.data_module import DataModule
 from models.distillation import DistillationLoss
 from models.mlp import build_mlp
+from models.plda import PLDAConfig, SimplePLDA
 from utils.cli import parse_config
 from utils.config import parse_label_schema
 from utils.logging_utils import setup_logger
@@ -64,6 +68,56 @@ def _load_teacher(cfg: Dict, input_dim: int, num_classes: int, device: torch.dev
     teacher.to(device)
     teacher.eval()
     return teacher
+
+
+def _collect_numpy(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+    features, labels = [], []
+    for batch in loader:
+        feats = batch["features"].flatten(1).cpu().numpy()
+        labs = batch["label"].cpu().numpy()
+        features.append(feats)
+        labels.append(labs)
+    if not features:
+        raise RuntimeError("Empty loader provided to PLDA trainer")
+    return np.concatenate(features, axis=0), np.concatenate(labels, axis=0)
+
+
+def train_plda(cfg: Dict, train_loader: DataLoader, valid_loader: DataLoader, test_loader: DataLoader, label_map: Dict[str, int]) -> None:
+    output_dir = Path(cfg["data"].get("output_dir", "experiments"))
+    plda_cfg_dict = cfg.get("models", {}).get("plda", {})
+    plda_cfg = PLDAConfig(**plda_cfg_dict)
+    X_train, y_train = _collect_numpy(train_loader)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    model = SimplePLDA(plda_cfg, len(label_map))
+    model.fit(X_train, y_train)
+
+    def _eval(loader: DataLoader) -> Dict:
+        X, y = _collect_numpy(loader)
+        Xn = scaler.transform(X)
+        preds = model.predict(Xn)
+        probs = model.predict_proba(Xn)
+        metrics = compute_metrics(y, preds, probs, list(label_map.keys()))
+        return {"metrics": metrics}
+
+    evals = {
+        "train": _eval(train_loader),
+        "valid": _eval(valid_loader),
+        "test": _eval(test_loader),
+    }
+    ckpt_path = output_dir / "checkpoints" / "plda.joblib"
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"model": model, "scaler": scaler, "label_map": label_map, "config": plda_cfg_dict}, ckpt_path)
+    summary = {
+        "model": "plda",
+        "train_macro_f1": evals["train"]["metrics"].macro_f1,
+        "valid_macro_f1": evals["valid"]["metrics"].macro_f1,
+        "test_macro_f1": evals["test"]["metrics"].macro_f1,
+        "test_accuracy": evals["test"]["metrics"].accuracy,
+    }
+    results_path = output_dir / "results.json"
+    results_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    logger.info("PLDA training complete; checkpoint at %s", ckpt_path)
 
 
 def _build_optimizer(model: nn.Module, cfg: Dict):
@@ -136,6 +190,10 @@ def main() -> None:
     set_seed(cfg.get("seed", 1337))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader, valid_loader, test_loader, label_map = _prepare_dataloaders(cfg)
+    model_choice = cfg["training"].get("model", "mlp_small")
+    if model_choice == "plda":
+        train_plda(cfg, train_loader, valid_loader, test_loader, label_map)
+        return
     input_dim = _determine_dims(train_loader)
     num_classes = len(label_map)
     model = _init_model(cfg, input_dim, num_classes).to(device)
@@ -153,7 +211,7 @@ def main() -> None:
     scaler = GradScaler(enabled=cfg["training"].get("mix_precision", False))
 
     best_metric = 0.0
-    best_path = Path(cfg["data"].get("output_dir", "experiments")) / "checkpoints" / f"{cfg["training"].get("model", "mlp_small")}.pt"
+    best_path = Path(cfg["data"].get("output_dir", "experiments")) / "checkpoints" / f"{model_choice}.pt"
     history = {"train_loss": [], "valid_macro_f1": []}
 
     for epoch in range(1, cfg["training"].get("epochs", 10) + 1):
@@ -181,6 +239,7 @@ def main() -> None:
     # final eval on test split
     test_result = evaluate(model, test_loader, device, list(label_map.keys()))
     summary = {
+        "model": model_choice,
         "best_macro_f1": best_metric,
         "test_accuracy": test_result["metrics"].accuracy,
         "test_macro_f1": test_result["metrics"].macro_f1,

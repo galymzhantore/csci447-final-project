@@ -1,61 +1,110 @@
 # Edge Fluency Classifier
 
-Comprehensive research-grade starter kit for building pronunciation/fluency classifiers that run efficiently on edge devices. The project ingests the Speechocean 762 corpus, prepares speech clips, extracts MFCC/FBANK features, trains classical PLDA and compact neural models, evaluates robustness, and exports quantized models for Raspberry Pi or Android deployment.
+Edge-ready pipeline for scoring pronunciation/fluency from 1–5 s speech clips, exporting tiny TensorFlow Lite models, and deploying them in an on-device Android app with full profiling hooks.
 
 ## Highlights
-- Deterministic, configurable pipeline (YAML config + CLI overrides) targeting 1–5 s 16 kHz mono clips.
-- Classical baselines (LDA, k-NN, Perceptron, PLDA) plus compact/teacher MLPs with knowledge distillation.
-- MFCC+Δ+ΔΔ and FBANK features, CMVN (utterance/global), on-disk cache, optional on-the-fly extraction.
-- Rich augmentations (noise mixes, tempo/pitch, RIR convolution) and SNR sweep utilities.
-- Quantization (dynamic, static, QAT), magnitude pruning, ONNX/TFLite export with parity checks.
-- Device profiler for Pi 4 or Android via `onnxruntime`/`tflite-runtime`, latency+memory+energy estimates.
 
-## Quickstart
+- **Data**: Pull Mozilla Common Voice (or Speechocean) splits with language filtering (`LANGS="en,es"`), optional locally recorded clips, deterministic manifests, and augmentation-ready metadata.
+- **Features**: MFCC/FBANK extraction with CMVN, augmentation (noise, pitch/tempo, RIR), caching, and configurable clip windows.
+- **Models**: Compact MLPs (teacher/student), classical PLDA scoring, optional distillation, multi-metric evaluation, and SNR robustness sweeps.
+- **Quantization**: Dynamic + static INT8 quantization (PyTorch) with accuracy tracking, ONNX export, FP32/INT8 TFLite generation, and metadata packs for Android assets.
+- **Deployment**: Jetpack Compose app with on-device MFCC extraction, AudioRecord capture, selectable clips, live latency/memory/battery logging, and `adb`-retrievable metrics for profiling.
+
+## End-to-End Workflow
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 make setup
-make download DATA_DIR="./data" OUTPUT_DIR="./experiments"
-make features DATA_DIR="./data" OUTPUT_DIR="./experiments"
+
+# 1) Data + features
+make download LANGS="en"
+make features
+
+# 2) Training
 make train_teacher
 make train_student
+make train_plda           # optional classical baseline
 make evaluate_all
+
+# 3) Edge readiness
 make quantize
-make export
-make profile TARGET_DEVICE="pi4"
+make export_tflite
+make convert_android      # copies assets into android_app/
+
+# 4) Android + profiling
+make android_build        # requires Android SDK
+make android_profile DEVICE="android_tablet"
+
+# 5) Reporting
 make report
 ```
-Adjust user parameters (TARGET_DEVICE, CLIP_SECONDS, LABEL_SCHEMA, DATA_DIR, OUTPUT_DIR) via CLI or config overrides.
+
+Core parameters (override via env or CLI): `LANGS`, `DEVICE/TARGET_DEVICE`, `CLIP_SECONDS`, `LABEL_SCHEMA`, `DATA_DIR`, `OUTPUT_DIR`.
 
 ## Repository Layout
+
 ```
 repo_root/
-├── config/                # YAML configs
-├── data/                  # Raw + processed audio (gitignored)
-├── docker/                # Container recipes
-├── experiments/           # Logs, checkpoints, figures, reports
-├── notebooks/             # Demos
-├── src/                   # Library + entrypoints
-├── tests/                 # Unit + smoke tests
-├── results.md             # Latest results and findings
-└── Makefile               # Workflow automation
+├── android_app/                   # Android Studio project (Jetpack Compose + TFLite)
+├── config/default.yaml            # Global configuration
+├── data/                          # Raw audio + caches (gitignored)
+├── docker/Dockerfile.cpu          # Repro training environment
+├── experiments/                   # Artifacts (checkpoints, metrics, exports)
+├── notebooks/demo_android_pipeline.ipynb
+├── results/                       # Final report + profiler exports
+├── src/                           # Python library + entrypoints
+├── Makefile                       # Automation shortcuts
+└── README.md
 ```
 
-## Key Commands
-- `make download`: Stream mispeech/speechocean762 splits via Hugging Face and build manifests.
-- `make features`: Run preprocessing, augmentations, and feature extraction cache.
-- `make train_teacher` / `make train_student`: Train teacher MLP and distilled student (plus classical baselines via flags).
-- `make evaluate_all`: Evaluate across splits, SNR sweeps, and robustness tests.
-- `make quantize` / `make export`: Quantize/prune + export ONNX/TFLite artifacts.
-- `make profile`: Profile exported models on-device or locally.
-- `make report`: Aggregate metrics, plots, and ablation tables into `results.md`.
+## Make Targets (Automation)
 
-- Default data source is [mispeech/speechocean762](https://huggingface.co/datasets/mispeech/speechocean762). `make download` automatically fetches the splits via `datasets.load_dataset`, rescales audio to 16 kHz, buckets pronunciation scores into `poor` (≤60), `moderate` (≤85), and `good`, and writes `speechocean_manifest.csv`.
-- Before running the download, authenticate with Hugging Face (`huggingface-cli login`) so the dataset can be streamed.
-- Manifest schema: `path,duration,text,speaker_id,label`.
-- Labels map to three fluency buckets (`poor`, `moderate`, `good`) but custom label schemas are accepted (JSON map string).
+| Target | Description |
+| ------ | ----------- |
+| `make download` | Stream Common Voice/Speechocean splits, merge optional local recordings, stratify manifests. |
+| `make features` | Run preprocessing, augmentations, MFCC/FBANK extraction, and CMVN stats. |
+| `make train_teacher` / `make train_student` | Train teacher MLP and distilled student. |
+| `make train_plda` | Fit a classical PLDA baseline and persist as `plda.joblib`. |
+| `make evaluate_all` | Compute per-split metrics + SNR sweeps with figures under `experiments/`. |
+| `make quantize` | Run dynamic/static INT8 quantization + pruning with accuracy tracking. |
+| `make export_tflite` | Produce ONNX + FP32/INT8 TFLite, label maps, and metadata. |
+| `make convert_android` | Copy latest model + metadata into `android_app/app/src/main/assets/`. |
+| `make android_build` | Assemble the Android app (requires local Android SDK). |
+| `make android_profile` | Pull profiler metrics (host + Android device via `adb`). |
+| `make report` | Summarize metrics/latency/size into `results.md` and `results/report.md`. |
 
-## Results Snapshot
-See `results.md` for accuracy/latency/size curves, robustness tables, and ablations. A reference configuration reaches <5 % accuracy drop after INT8 quantization while shrinking size by >70 %.
+## Android App (Iguana-ready)
+
+- Kotlin + Jetpack Compose UI (`MainActivity.kt`) with record/select audio flows, prediction cards, and telemetry view.
+- `FeatureExtractor.kt` implements MFCC(+Δ/+ΔΔ) to keep preprocessing on-device.
+- `InferenceHelper.kt` loads the quantized TFLite model, label map, and metadata, returning latency-aware predictions.
+- `MetricsLogger.kt` writes latency/memory/battery snapshots to `files/metrics/latest.json`, allowing `make android_profile` to pull them via `adb shell run-as`.
+- Assets (`model_fluency.tflite`, `label_map.json`, `metadata.json`) are refreshed after `make convert_android`.
+
+Open `android_app/` in Android Studio Igauana+, plug in a tablet, and run to capture profiler traces. Exported screenshots/JSON can be stored under `results/`.
+
+## Data Notes
+
+- Default dataset: `mozilla-foundation/common_voice_17_0`. Labels are derived from up/down vote ratios (100-point pseudo-score mapped to `poor`, `moderate`, `good` thresholds).
+- To switch to Speechocean, set `data.dataset: speechocean` or run `make download DATA_DIR=... LANGS="en"`.
+- Custom label schemas: pass `LABEL_SCHEMA='{"bad":0,"ok":1,"great":2}'` or edit `config/default.yaml`.
+- Local bilingual snippets: run `python -m src.data.local_recorder --output-dir data/local --label moderate` and re-run `make download`.
+
+## Results & Profiling
+
+- Quantization summary (`experiments/quantized/summary.json`) tracks size + accuracy deltas for FP32, dynamic, static, and pruned models.
+- Android + host profiling writes CSV/JSON to `experiments/profiles/` and mirrors summaries to `results/profile_summary.json`.
+- `make report` stitches everything into `results.md` + `results/report.md`, including INT8 accuracy drop (goal <5 %), latency (<100 ms/clip), and model size (<10 MB).
+
+## Docker
+
+`docker/Dockerfile.cpu` provisions Python 3.11 with all dependencies, enabling reproducible training/export runs:
+
+```bash
+docker build -t edge-fluency -f docker/Dockerfile.cpu .
+docker run --rm -v $PWD:/workspace edge-fluency bash -lc "make download && make features && make train_teacher"
+```
 
 ## License & Attribution
-Released under the MIT License. When downloading Speechocean 762 via Hugging Face, review the dataset license and attribution requirements.
+
+Released under the MIT License. Ensure compliance with Common Voice/Speechocean dataset terms when downloading or redistributing audio samples.

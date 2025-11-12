@@ -1,0 +1,8 @@
+{
+  "freq": 60,
+  "frames": 120,
+  "input_dim": 7200,
+  "sample_rate": 16000,
+  "clip_seconds": 5,
+  "fp32_accuracy": 0.0
+}

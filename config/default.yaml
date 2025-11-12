@@ -1,10 +1,12 @@
 seed: 1337
+langs: ["en"]
 data:
   data_dir: data
   output_dir: experiments
-  manifest_name: speechocean_manifest.csv
-  dataset: speechocean
-  dataset_name: mispeech/speechocean762
+  manifest_name: fluency_manifest.csv
+  dataset: commonvoice  # options: commonvoice, speechocean
+  dataset_name: mozilla-foundation/common_voice_17_0
+  langs: ["en"]
   score_thresholds:
     poor: 60
     moderate: 85
@@ -16,6 +18,10 @@ data:
     poor: 0
     moderate: 1
     good: 2
+  split_ratio:
+    train: 0.8
+    valid: 0.1
+    test: 0.1
   speaker_min_clips: 3
   stratify_by: ["label", "speaker_id"]
   balance_epsilon: 1
@@ -23,6 +29,7 @@ data:
   noise_dir: data/noise
   rir_dir: data/rir
   synthetic_if_missing: true
+  local_manifest: data/local/local_manifest.csv
 augmentation:
   enabled: true
   peak_normalize: true
@@ -58,9 +65,12 @@ models:
     hidden_sizes: [512, 256, 128]
     dropout: 0.3
   mlp_activation: "relu"
+  plda:
+    lda_dim: 32
+    reg_cov: 0.01
 training:
   batch_size: 32
-  epochs: 30
+  epochs: 5
   learning_rate: 1.0e-3
   weight_decay: 1.0e-5
   optimizer: "adam"
@@ -72,10 +82,11 @@ training:
   log_interval: 20
   save_top_k: 3
   label_smoothing: 0.0
+  model: mlp_small
   distillation:
     alpha: 0.5
     temperature: 2.0
-    teacher_checkpoint: experiments/checkpoints/teacher.pt
+    teacher_checkpoint: experiments/checkpoints/mlp_teacher.pt
 evaluation:
   batch_size: 64
   snr_sweep_db: [0, 5, 10, 15, 20, 30]
@@ -85,12 +96,25 @@ quantization:
   dynamic: true
   qat_epochs: 5
   qat_batch_size: 16
+  int8_calibration_samples: 128
+  calibration_split: "valid"
+  prune_amount: 0.3
 export:
   onnx_opset: 17
   tflite_int8: true
+  add_metadata: true
 profile:
-  target_device: "pi4"
+  target_device: "android_tablet"
   repetitions: 25
   warmup: 5
+  adb_path: "adb"
 reporting:
   accuracy_drop_threshold: 0.05
+  results_dir: results
+android:
+  package_name: "com.example.fluencyscorer"
+  min_sdk: 26
+  target_sdk: 34
+  model_asset: "android_app/app/src/main/assets/model_fluency.tflite"
+  label_map_asset: "android_app/app/src/main/assets/label_map.json"
+  metrics_asset: "android_app/app/src/main/assets/metadata.json"
