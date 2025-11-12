@@ -1,0 +1,91 @@
+seed: 1337
+langs: ["en"]
+data:
+  data_dir: data
+  output_dir: experiments
+  manifest_name: commonvoice_manifest.csv
+  sample_rate: 16000
+  clip_seconds: [1, 5]
+  label_schema: "3class"
+  label_map:
+    poor: 0
+    moderate: 1
+    good: 2
+  speaker_min_clips: 3
+  stratify_by: ["label", "speaker_id"]
+  balance_epsilon: 1
+  cache_waveforms: true
+  noise_dir: data/noise
+  rir_dir: data/rir
+  synthetic_if_missing: true
+augmentation:
+  enabled: true
+  peak_normalize: true
+  trim_db: 25
+  vad_threshold: 0.5
+  gaussian_snr_db: [10, 20]
+  pink_snr_db: [5, 15]
+  bg_mix_prob: 0.5
+  tempo_range: [0.95, 1.05]
+  pitch_semitones: [-1.0, 1.0]
+  rir_prob: 0.25
+  snr_sweep_db: [0, 5, 10, 15, 20, 30]
+  for_features: false
+features:
+  type: "mfcc"
+  mfcc:
+    n_mfcc: 20
+    n_mels: 80
+    add_deltas: true
+    add_delta_deltas: true
+  fbank:
+    n_mels: 40
+  cmvn: "global"  # options: none, utterance, global
+  frame_length_ms: 25
+  frame_shift_ms: 10
+  cache_dir: data/features
+  on_the_fly: false
+models:
+  mlp_small:
+    hidden_sizes: [128, 64]
+    dropout: 0.2
+  mlp_teacher:
+    hidden_sizes: [512, 256, 128]
+    dropout: 0.3
+  mlp_activation: "relu"
+training:
+  batch_size: 32
+  epochs: 30
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-5
+  optimizer: "adam"
+  scheduler: "reduce_on_plateau"
+  patience: 5
+  num_workers: 4
+  mix_precision: false
+  class_weights: null
+  log_interval: 20
+  save_top_k: 3
+  label_smoothing: 0.0
+  distillation:
+    alpha: 0.5
+    temperature: 2.0
+    teacher_checkpoint: experiments/checkpoints/teacher.pt
+evaluation:
+  batch_size: 64
+  snr_sweep_db: [0, 5, 10, 15, 20, 30]
+  noise_types: ["gaussian", "pink", "rir"]
+quantization:
+  static: true
+  dynamic: true
+  qat_epochs: 5
+  qat_batch_size: 16
+export:
+  onnx_opset: 17
+  tflite_int8: true
+profile:
+  target_device: "pi4"
+  repetitions: 25
+  warmup: 5
+reporting:
+  accuracy_drop_threshold: 0.05
